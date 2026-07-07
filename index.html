@@ -670,6 +670,35 @@ h1,h2,h3{font-family:var(--display);font-weight:600;color:var(--maroon);}
   display:flex;align-items:center;justify-content:center;
 }
 
+/* rsvp manage table */
+.rsvp-table{
+  width:100%;border-collapse:collapse;
+  background:#fff;border:1px solid var(--gold-dim);border-radius:14px;overflow:hidden;
+  font-size:.9rem;
+}
+.rsvp-table th,.rsvp-table td{
+  padding:12px 14px;text-align:left;border-bottom:1px solid var(--ivory-dim);
+}
+.rsvp-table th{
+  background:rgba(201,162,75,.1);color:var(--maroon);
+  font-family:var(--display);font-weight:600;font-size:1rem;
+}
+.rsvp-table tr:last-child td{border-bottom:none;}
+.rsvp-table td.rsvp-del{text-align:center;}
+.rsvp-delete-btn{
+  background:var(--maroon);color:#fff;border:none;
+  width:22px;height:22px;border-radius:50%;
+  font-size:.75rem;line-height:1;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;
+}
+.rsvp-summary{
+  text-align:center;color:var(--maroon-soft);font-weight:300;margin-bottom:14px;font-size:.95rem;
+}
+@media(max-width:700px){
+  .rsvp-table{font-size:.8rem;}
+  .rsvp-table th,.rsvp-table td{padding:8px 8px;}
+}
+
 /* footer */
 footer{
   text-align:center;padding:60px 24px 90px;
@@ -994,6 +1023,12 @@ footer p{font-weight:300;font-size:.9rem;}
       <button type="submit" class="submit-btn" id="rsvp-submit" data-i18n="rsvpSubmit">Send RSVP</button>
       <div class="form-msg" id="rsvp-msg"></div>
     </form>
+    <div id="rsvp-list-wrap" style="max-width:820px;margin:32px auto 0;display:none;">
+      <div id="rsvp-list"></div>
+    </div>
+    <div style="text-align:center;margin-top:24px;">
+      <button id="manage-rsvp-btn" type="button" style="background:none;border:none;color:var(--gold-dim);font-size:.75rem;letter-spacing:.05em;text-decoration:underline;cursor:pointer;">🔒 Manage RSVPs</button>
+    </div>
   </div>
 </section>
 
@@ -1692,6 +1727,95 @@ rsvpForm.addEventListener('submit', async (e)=>{
     btn.disabled = false;
   }
 });
+
+/* ==========================================================================
+   MANAGE RSVPs — passcode-gated view listing every RSVP submitted, with
+   a delete button per row. Uses the same CONFIG.adminPasscode as the
+   blessings moderation feature above.
+   ========================================================================== */
+const manageRsvpBtn = document.getElementById('manage-rsvp-btn');
+const rsvpListWrap = document.getElementById('rsvp-list-wrap');
+const rsvpListEl = document.getElementById('rsvp-list');
+let rsvpManageMode = false;
+
+async function loadRsvps(){
+  try{
+    const keys = await storageListPrefixed('rsvp:', true);
+    const rsvps = [];
+    for (const k of keys){
+      try{
+        const res = await storageGet(k, true);
+        if (res && res.value){
+          const parsed = JSON.parse(res.value);
+          parsed._key = k;
+          rsvps.push(parsed);
+        }
+      }catch(e){ /* skip missing */ }
+    }
+    rsvps.sort((a,b)=> b.ts - a.ts);
+    renderRsvps(rsvps);
+  }catch(e){
+    renderRsvps([]);
+  }
+}
+
+function renderRsvps(list){
+  if (!list.length){
+    rsvpListEl.innerHTML = '<p class="rsvp-summary">No RSVPs yet.</p>';
+    return;
+  }
+  const totalGuests = list.reduce((sum, r)=> sum + (parseInt(r.guests,10) || 0), 0);
+  const attending = list.filter(r=> r.attendance === 'Joyfully Attending').length;
+  const declining = list.filter(r=> r.attendance === 'Regretfully Declining').length;
+
+  const rows = list.map(r => `
+    <tr>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.phone)}</td>
+      <td>${escapeHtml(String(r.guests))}</td>
+      <td>${escapeHtml(r.attendance)}</td>
+      <td class="rsvp-del"><button class="rsvp-delete-btn" data-key="${escapeHtml(r._key)}" title="Delete this RSVP" aria-label="Delete this RSVP">✕</button></td>
+    </tr>
+  `).join('');
+
+  rsvpListEl.innerHTML = `
+    <p class="rsvp-summary">${list.length} response${list.length===1?'':'s'} · ${attending} attending · ${declining} declining · ${totalGuests} total guests</p>
+    <div style="overflow-x:auto;">
+      <table class="rsvp-table">
+        <thead><tr><th>Name</th><th>Phone</th><th>Guests</th><th>Attendance</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+
+  rsvpListEl.querySelectorAll('.rsvp-delete-btn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if (!confirm('Remove this RSVP? This cannot be undone.')) return;
+      await storageDelete(btn.dataset.key, true);
+      loadRsvps();
+    });
+  });
+}
+
+manageRsvpBtn.addEventListener('click', async ()=>{
+  if (rsvpManageMode){
+    rsvpManageMode = false;
+    manageRsvpBtn.textContent = '🔒 Manage RSVPs';
+    rsvpListWrap.style.display = 'none';
+    return;
+  }
+  const entered = prompt('Enter the passcode to manage RSVPs:');
+  if (entered === null) return;
+  if (entered === CONFIG.adminPasscode){
+    rsvpManageMode = true;
+    manageRsvpBtn.textContent = '🔓 Hide RSVPs';
+    rsvpListWrap.style.display = 'block';
+    loadRsvps();
+  } else {
+    alert('Incorrect passcode.');
+  }
+});
+
 
 /* ==========================================================================
    GUEST WISHES WALL (persisted via storage helper; falls back gracefully)
