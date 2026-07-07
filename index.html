@@ -232,13 +232,23 @@ h1,h2,h3{font-family:var(--display);font-weight:600;color:var(--maroon);}
   padding:8px 14px;
   display:flex;
   align-items:center;
-  gap:10px;
+  gap:8px;
   color:var(--maroon);
   box-shadow:0 6px 20px rgba(92,18,32,.15);
-  opacity:0;
+  opacity:1;
   transition:opacity .6s ease;
 }
-#music-controls.visible{opacity:1;}
+.music-icon{
+  font-size:1.15rem;
+  display:inline-block;
+  animation:note-spin 6s linear infinite;
+  animation-play-state:paused;
+}
+.music-icon.playing{animation-play-state:running;}
+@keyframes note-spin{
+  from{transform:rotate(0deg);}
+  to{transform:rotate(360deg);}
+}
 #music-controls button{
   background:none;border:none;color:var(--maroon);font-size:1.1rem;
   width:30px;height:30px;display:flex;align-items:center;justify-content:center;
@@ -736,14 +746,16 @@ footer p{font-weight:300;font-size:.9rem;}
 
 <!-- background music -->
 <audio id="bg-music" loop preload="none">
-  <!-- Replace with your own hosted instrumental wedding track -->
+  <!-- Optional: set CONFIG.musicUrl to your own hosted track to use this instead of the built-in ambient music -->
   <source src="" type="audio/mpeg">
 </audio>
 <div id="music-controls">
-  <button id="music-toggle" title="Play / Pause" aria-label="Play or pause music">▶️</button>
+  <span class="music-icon" id="music-icon" aria-hidden="true">🎵</span>
+  <button id="music-toggle" title="Play / Pause music" aria-label="Play or pause music">▶️</button>
   <button id="music-mute" title="Mute / Unmute" aria-label="Mute or unmute music">🔊</button>
   <input type="range" id="music-volume" min="0" max="1" step="0.05" value="0.5" aria-label="Volume">
 </div>
+
 
 <!-- ==========================================================================
      FAMILY INVITATION
@@ -1300,30 +1312,131 @@ if (CONFIG.musicUrl) {
   bgMusic.load();
 }
 
+/* ==========================================================================
+   AMBIENT MUSIC ENGINE
+   Built-in, royalty-free instrumental music generated live with the
+   WebAudio API — no external mp3 needed. A soft sustained pad plays under
+   a gentle plucked pentatonic melody (veena/santoor-like), looping for the
+   entire visit. If CONFIG.musicUrl is set to a hosted track, that plays
+   instead and this engine stays silent.
+   ========================================================================== */
+let audioCtx = null;
+let masterGain = null;
+let musicPlaying = false;
+let musicMuted = false;
+let musicVolumeLevel = 0.5;
+let padOscillators = [];
+let melodyTimeoutId = null;
+
+// A gentle major-pentatonic scale (Sa Re Ga Pa Dha), spanning two octaves
+const SCALE = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 784.00, 880.00];
+
+function ensureAudioContext(){
+  if (!audioCtx){
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = musicMuted ? 0 : musicVolumeLevel;
+    masterGain.connect(audioCtx.destination);
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function startPad(){
+  const now = audioCtx.currentTime;
+  const chordNotes = [130.81, 164.81, 196.00]; // soft C major triad, low register
+  padOscillators = chordNotes.map((freq, i)=>{
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.09, now + 3 + i*0.5);
+    osc.connect(gain).connect(masterGain);
+    osc.start(now);
+    return { osc, gain };
+  });
+}
+
+function stopPad(){
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  padOscillators.forEach(({osc, gain})=>{
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(gain.gain.value, now);
+    gain.gain.linearRampToValueAtTime(0, now + 1.2);
+    osc.stop(now + 1.3);
+  });
+  padOscillators = [];
+}
+
+function pluckNote(freq, when, velocity){
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, when);
+  gain.gain.exponentialRampToValueAtTime(velocity, when + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 1.8);
+  osc.connect(gain).connect(masterGain);
+  osc.start(when);
+  osc.stop(when + 2);
+}
+
+function scheduleMelody(){
+  if (!musicPlaying) return;
+  const now = audioCtx.currentTime;
+  const note = SCALE[Math.floor(Math.random() * SCALE.length)];
+  pluckNote(note, now + 0.05, 0.11 + Math.random()*0.05);
+  const nextIn = 900 + Math.random() * 1100; // gentle, unhurried pacing
+  melodyTimeoutId = setTimeout(scheduleMelody, nextIn);
+}
+
+function startAmbientMusic(){
+  ensureAudioContext();
+  if (musicPlaying) return;
+  musicPlaying = true;
+  startPad();
+  scheduleMelody();
+  document.getElementById('music-icon').classList.add('playing');
+  document.getElementById('music-toggle').textContent = '⏸️';
+}
+
+function stopAmbientMusic(){
+  musicPlaying = false;
+  stopPad();
+  if (melodyTimeoutId) clearTimeout(melodyTimeoutId);
+  document.getElementById('music-icon').classList.remove('playing');
+  document.getElementById('music-toggle').textContent = '▶️';
+}
+
 function playTempleBellThenMusic(){
   // Simple bell chime using the WebAudio API, no external asset required
   try{
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const now = ctx.currentTime;
+    ensureAudioContext();
+    const now = audioCtx.currentTime;
     [880, 1320, 1760].forEach((freq, i)=>{
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
       osc.frequency.value = freq;
       osc.type = 'sine';
       gain.gain.setValueAtTime(0.0001, now + i*0.25);
       gain.gain.exponentialRampToValueAtTime(0.25, now + i*0.25 + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + i*0.25 + 1.6);
-      osc.connect(gain).connect(ctx.destination);
+      osc.connect(gain).connect(audioCtx.destination);
       osc.start(now + i*0.25);
       osc.stop(now + i*0.25 + 1.7);
     });
   }catch(e){ /* ignore audio errors */ }
 
   if (CONFIG.musicUrl){
-    bgMusic.volume = 0.5;
+    bgMusic.volume = musicVolumeLevel;
+    bgMusic.muted = musicMuted;
     bgMusic.play().catch(()=>{});
-    musicControls.classList.add('visible');
+    document.getElementById('music-icon').classList.add('playing');
     document.getElementById('music-toggle').textContent = '⏸️';
+  } else {
+    // Give the bell a moment to ring out before the ambient music fades in
+    setTimeout(()=> startAmbientMusic(), 1200);
   }
 }
 
@@ -1342,14 +1455,38 @@ const musicMute = document.getElementById('music-mute');
 const musicVolume = document.getElementById('music-volume');
 
 musicToggle.addEventListener('click', ()=>{
-  if (bgMusic.paused){ bgMusic.play().catch(()=>{}); musicToggle.textContent='⏸️'; }
-  else { bgMusic.pause(); musicToggle.textContent='▶️'; }
+  if (CONFIG.musicUrl){
+    if (bgMusic.paused){
+      bgMusic.play().catch(()=>{});
+      musicToggle.textContent='⏸️';
+      document.getElementById('music-icon').classList.add('playing');
+    } else {
+      bgMusic.pause();
+      musicToggle.textContent='▶️';
+      document.getElementById('music-icon').classList.remove('playing');
+    }
+  } else {
+    if (musicPlaying) stopAmbientMusic(); else startAmbientMusic();
+  }
 });
 musicMute.addEventListener('click', ()=>{
-  bgMusic.muted = !bgMusic.muted;
-  musicMute.textContent = bgMusic.muted ? '🔇' : '🔊';
+  musicMuted = !musicMuted;
+  musicMute.textContent = musicMuted ? '🔇' : '🔊';
+  if (CONFIG.musicUrl){
+    bgMusic.muted = musicMuted;
+  } else if (masterGain){
+    masterGain.gain.setTargetAtTime(musicMuted ? 0 : musicVolumeLevel, audioCtx.currentTime, 0.05);
+  }
 });
-musicVolume.addEventListener('input', (e)=>{ bgMusic.volume = parseFloat(e.target.value); });
+musicVolume.addEventListener('input', (e)=>{
+  musicVolumeLevel = parseFloat(e.target.value);
+  if (CONFIG.musicUrl){
+    bgMusic.volume = musicVolumeLevel;
+  } else if (masterGain && !musicMuted){
+    masterGain.gain.setTargetAtTime(musicVolumeLevel, audioCtx.currentTime, 0.05);
+  }
+});
+
 
 /* ==========================================================================
    PETALS — continuous ambient canvas animation
