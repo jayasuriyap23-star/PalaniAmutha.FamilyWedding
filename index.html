@@ -657,10 +657,18 @@ h1,h2,h3{font-family:var(--display);font-weight:600;color:var(--maroon);}
   border:1px solid var(--gold-dim);
   border-radius:14px;padding:20px;
   box-shadow:0 8px 20px rgba(92,18,32,.05);
+  position:relative;
 }
 .wish-card .wname{font-family:var(--display);color:var(--maroon);font-size:1.1rem;}
 .wish-card .wmsg{font-weight:300;color:var(--maroon-soft);margin-top:6px;line-height:1.6;font-size:.95rem;}
 .wishes-empty{text-align:center;color:var(--maroon-soft);font-weight:300;grid-column:1/-1;}
+.wish-delete-btn{
+  position:absolute;top:10px;right:10px;
+  background:var(--maroon);color:#fff;border:none;
+  width:22px;height:22px;border-radius:50%;
+  font-size:.75rem;line-height:1;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
 
 /* footer */
 footer{
@@ -1026,6 +1034,9 @@ footer p{font-weight:300;font-size:.9rem;}
     <div class="wishes-wall" id="wishes-wall">
       <p class="wishes-empty" data-i18n="wishesLoading">Loading blessings…</p>
     </div>
+    <div style="text-align:center;margin-top:24px;">
+      <button id="manage-wishes-btn" type="button" style="background:none;border:none;color:var(--gold-dim);font-size:.75rem;letter-spacing:.05em;text-decoration:underline;cursor:pointer;">🔒 Manage blessings</button>
+    </div>
   </div>
 </section>
 
@@ -1060,7 +1071,12 @@ const CONFIG = {
   mapsQuery: "Sri Kalyana Mahal Mylapore Chennai",
 
   // Background music: paste a hosted mp3 URL below (leave blank to hide silently until you add one)
-  musicUrl: ""
+  musicUrl: "",
+
+  // Passcode to enter "Manage blessings" mode on the Guest Blessings wall,
+  // which reveals a delete (✕) button on each message. Change this to
+  // something private before sharing the site with guests.
+  adminPasscode: "kvswedding2026"
 };
 
 /* ==========================================================================
@@ -1288,9 +1304,6 @@ function applyLanguage(lang){
   document.querySelectorAll('.lang-btn').forEach(btn=>{
     btn.classList.toggle('active', btn.dataset.lang === lang);
   });
-
-  // Re-render dynamic wishes wall in the new language (empty-state text)
-  if (typeof loadWishes === 'function') loadWishes();
 }
 
 document.querySelectorAll('.lang-btn').forEach(btn=>{
@@ -1641,6 +1654,15 @@ async function storageGet(key, shared){
   const bucket = key.startsWith('wish:') ? memoryStore.wish : memoryStore.rsvp;
   return bucket[key] !== undefined ? { key, value: bucket[key], shared } : null;
 }
+async function storageDelete(key, shared){
+  if (storageAvailable()){
+    try{ return await window.storage.delete(key, shared); }
+    catch(e){ /* fall through to memory */ }
+  }
+  const bucket = key.startsWith('wish:') ? memoryStore.wish : memoryStore.rsvp;
+  delete bucket[key];
+  return { key, deleted: true, shared };
+}
 
 /* ==========================================================================
    RSVP FORM  (persisted via storage helper above; falls back gracefully)
@@ -1673,9 +1695,14 @@ rsvpForm.addEventListener('submit', async (e)=>{
 
 /* ==========================================================================
    GUEST WISHES WALL (persisted via storage helper; falls back gracefully)
+   An admin-only "Manage blessings" link reveals a small delete button on
+   each message, gated by CONFIG.adminPasscode, so you can remove any
+   inappropriate or unwanted post after it's been submitted.
    ========================================================================== */
 const wishForm = document.getElementById('wish-form');
 const wishesWall = document.getElementById('wishes-wall');
+const manageWishesBtn = document.getElementById('manage-wishes-btn');
+let wishesAdminMode = false;
 
 function renderWishes(list){
   const dict = TRANSLATIONS[currentLang] || TRANSLATIONS.en;
@@ -1684,11 +1711,22 @@ function renderWishes(list){
     return;
   }
   wishesWall.innerHTML = list.map(w => `
-    <div class="wish-card">
+    <div class="wish-card" data-key="${escapeHtml(w._key)}">
+      ${wishesAdminMode ? `<button class="wish-delete-btn" data-key="${escapeHtml(w._key)}" title="Delete this message" aria-label="Delete this message">✕</button>` : ''}
       <div class="wname">${escapeHtml(w.name)}</div>
       <div class="wmsg">${escapeHtml(w.message)}</div>
     </div>
   `).join('');
+
+  if (wishesAdminMode){
+    wishesWall.querySelectorAll('.wish-delete-btn').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        if (!confirm('Remove this blessing? This cannot be undone.')) return;
+        await storageDelete(btn.dataset.key, true);
+        loadWishes();
+      });
+    });
+  }
 }
 function escapeHtml(str){
   const d = document.createElement('div');
@@ -1703,7 +1741,11 @@ async function loadWishes(){
     for (const k of keys){
       try{
         const res = await storageGet(k, true);
-        if (res && res.value) wishes.push(JSON.parse(res.value));
+        if (res && res.value){
+          const parsed = JSON.parse(res.value);
+          parsed._key = k;
+          wishes.push(parsed);
+        }
       }catch(e){ /* skip missing */ }
     }
     wishes.sort((a,b)=> b.ts - a.ts);
@@ -1734,6 +1776,24 @@ wishForm.addEventListener('submit', async (e)=>{
     msg.textContent = dict.wishError;
   }finally{
     btn.disabled = false;
+  }
+});
+
+manageWishesBtn.addEventListener('click', ()=>{
+  if (wishesAdminMode){
+    wishesAdminMode = false;
+    manageWishesBtn.textContent = '🔒 Manage blessings';
+    loadWishes();
+    return;
+  }
+  const entered = prompt('Enter the passcode to manage blessings:');
+  if (entered === null) return;
+  if (entered === CONFIG.adminPasscode){
+    wishesAdminMode = true;
+    manageWishesBtn.textContent = '🔓 Exit manage mode';
+    loadWishes();
+  } else {
+    alert('Incorrect passcode.');
   }
 });
 </script>
